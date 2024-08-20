@@ -9,10 +9,18 @@
 
 
 import re
+import os
+import requests
 import pandas as pd
 from datetime import date
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path)
+os.environ['X-NCP-APIGW-API-KEY-ID'] = os.getenv('X-NCP-APIGW-API-KEY-ID')
+os.environ['X-NCP-APIGW-API-KEY'] = os.getenv('X-NCP-APIGW-API-KEY')
 
 
 def get_event_info_from_naver(keyword, page_limit):
@@ -46,7 +54,7 @@ def get_event_info_from_naver(keyword, page_limit):
     
     def extract_juso_from_page(html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
-        juso = soup.find_all('span', class_='LDgIH')
+        juso = soup.find('span', class_='LDgIH').get_text(separator=' ', strip=True)
         return juso
     
     def add_info(texts):
@@ -86,7 +94,29 @@ def get_event_info_from_naver(keyword, page_limit):
         event_period.append(my_dict['period']) 
         event_place.append(my_dict['place'])
         event_category.append(my_dict['category'])
-        
+    
+    def get_coordinates(address):
+        url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
+        headers = {
+            "X-NCP-APIGW-API-KEY-ID": os.getenv('X-NCP-APIGW-API-KEY-ID'),
+            "X-NCP-APIGW-API-KEY": os.getenv('X-NCP-APIGW-API-KEY')
+        }
+        params = {"query": address}
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data['addresses']:
+                latitude = round(float(data['addresses'][0]['y']), 4)
+                longitude = round(float(data['addresses'][0]['x']), 4)
+                #print(f"{latitude:.3f}, {longitude:.3f}")
+                return latitude, longitude
+            else:
+                return None, None
+            
+        else:
+            print(f"오류 발생 - 상태 코드: {response.status_code}, 응답: {response.text}")
+            return None, None
     
 
     url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query=" + keyword
@@ -96,6 +126,9 @@ def get_event_info_from_naver(keyword, page_limit):
     event_period_start = []
     event_period_end = []
     event_place = []
+    event_area = []
+    event_lat = []
+    event_lon = []
     event_category = []
     event_url_links = []
 
@@ -136,29 +169,46 @@ def get_event_info_from_naver(keyword, page_limit):
             event_names.append(names[0])
             event_url_links.append(event_url)
             
-            add_info(texts)            
+            add_info(texts)      
 
+        # 주소정보 가져오기
+        for place in event_place :
 
-        # 네이버 지도 크롤링은 naver api로 구현 필요
-        #page.goto(map_url)
-        #page.wait_for_timeout(30000)  # 페이지 로딩 대기시간 조절 : 30초 (네이버지도는 오래줘야함)
-        #html = page.content()
-        #juso = extract_juso_from_page(html)
+            place_url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query=" + str(place)
+            page.goto(place_url)
+            page.wait_for_timeout(100)  # 페이지 로딩 대기시간 조절 : 0.1초
+            html = page.content()
+
+            try:
+                juso = extract_juso_from_page(html)     #도로명주소
+                event_area.append(juso.split(' ')[0])
+                try:
+                    lat, lon = get_coordinates(juso)        #위경도
+                    event_lat.append(lat)
+                    event_lon.append(lon)
+                except:
+                    event_lat.append(None)
+                    event_lon.append(None)
+            except:
+                event_area.append(None)
+                event_lat.append(None)
+                event_lon.append(None)
+
             
         browser.close()
 
-    print(len(event_period), len(event_names), len(event_place), len(event_url_links))
+    print(len(event_period), len(event_names), len(event_place), len(event_url_links), len(event_area))
 
     event_df = pd.DataFrame({
             "k_date": event_period,
             "title": event_names,
             "place": event_place,
-            "lat": None,
-            "lon": None,
+            "lat": event_lat,
+            "lon": event_lon,
             "url_link": event_url_links,
             "start_date": event_period_start,
             "end_date": event_period_end,
-            "area": None,
+            "area": event_area,
             "category": event_category,
             "dt": str(date.today().strftime('%Y%m%d'))
             })

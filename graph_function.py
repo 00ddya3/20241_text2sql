@@ -1,6 +1,7 @@
 # backlogs
 # retriever 진행 후 찾은 top k와 max 유사도가 일정 이상이라면 few shot prompt, 미만이라면 적합한 db schema 재검색 
 # CoT를 단계를 명확하게 포맷팅해서 진행시키도록 프롬프트 수정
+# 스트림릿 서빙 시 ModuleNotFoundError: No module named 'distutils'
 
 # errorlogs
 # router prompt의 분류 오류가 잦음
@@ -48,24 +49,40 @@ opensearch_client = OpenSearch(
     timeout=30 #30초 이상 서치하면 넘나 길다.
 )
 
-history = StreamlitChatMessageHistory(key="chat_messages")
-
+chat_history = []
 
 def LLM(LLM_input):
+    global chat_history  # 전역 채팅 기록 사용
+
+    # 채팅 기록에 새 메시지 추가
+    chat_history.append({"role": "user", "content": LLM_input})
+
+    # AWS Bedrock 클라이언트 생성
     client = boto3.client('bedrock-runtime', region_name='us-east-1')
     bedrock_client = boto3.client('bedrock', region_name='us-east-1')
+
+    # 요청 본문 작성
+    request_body = {
+        "max_tokens": 8192,
+        "messages": chat_history,  # 채팅 기록 포함
+        "anthropic_version": "bedrock-2023-05-31"
+    }
+
+    # 모델 호출
     response = client.invoke_model(
         modelId='anthropic.claude-3-5-sonnet-20240620-v1:0',  # 사용할 모델 ID
-        body=json.dumps({
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": LLM_input}],
-        "anthropic_version": "bedrock-2023-05-31"
-    })
+        body=json.dumps(request_body)
     )
+
+    # 응답 처리
     response_body = response['body'].read()
     response_json = json.loads(response_body)
     output = response_json['content'][0]['text']
-    print()
+
+    # 응답을 채팅 기록에 추가
+    chat_history.append({"role": "assistant", "content": output})
+
+    print(output)  # 응답 출력
     return output
 
 
@@ -79,14 +96,14 @@ def LLM_get_embedding(text, model_name="text-embedding-3-large"):
 def LLM_Router(state):
     print(f"LLM_Router가 질문 분류 중..")
     user_question = state["user_question"]
-    history.add_user_message(user_question)
+    #history.add_user_message(user_question)
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(base_dir, 'prompt_files/router.txt')
 
     with open(file_path, 'r', encoding='utf-8') as file:
         llm_input = file.read()
-    llm_input = llm_input.replace('{chat_history}', str(history.messages))
+    #llm_input = llm_input.replace('{chat_history}', str(history.messages))
     llm_input = llm_input.replace('{user_question}', user_question)  
 
     user_intent = LLM(llm_input)
@@ -116,13 +133,23 @@ def LLM_event_list(state):
     with open(file_path, 'r', encoding='utf-8') as file:
         llm_input = file.read()
     llm_input = llm_input.replace('{current_time}', current_time)    
-    llm_input = llm_input.replace('{events_crawled}', str(events_crawled))#리스트여서 문자열로 바꿔 줌
+    #llm_input = llm_input.replace('{events_crawled}', str(events_crawled))#리스트여서 문자열로 바꿔 줌
     llm_input = llm_input.replace('{user_question}', user_question)    
 
-    events_output = LLM(llm_input)
-    state["events_output"] = events_output
-    history.add_ai_message(events_output)
-    print(f"LLM_event_list가 뽑은 이벤트 목록 : {events_crawled}")
+    events_condition = LLM(llm_input)
+    print(events_condition)
+    exec(str(events_condition))
+
+    events_output = events_crawled[['title', 'k_date', 'place']]
+    print(events_output.shape)
+    
+    events_output_str = ''
+    for index, row in events_output.iterrows():
+        events_output_str = events_output_str + f"{index}. 제목: {row['title']} 날짜: {row['k_date']} 위치: {row['place']}  " + '\n'
+
+    state["events_output"] = events_output_str
+    #history.add_ai_message(events_output_str)
+    print(f"LLM_event_list가 뽑은 이벤트 목록 : {events_output_str}")
 
     return state
 
@@ -253,7 +280,7 @@ def LLM_Final_Generate(state):
         llm_input = file.read()
 
     llm_input = llm_input.replace('{user_question}', user_question)
-    llm_input = llm_input.replace('{chat_history}', str(MessagesPlaceholder("chat_history")))
+    #llm_input = llm_input.replace('{chat_history}', str(MessagesPlaceholder("chat_history")))
     llm_input = llm_input.replace('{retrieved_top_k}', str(retrieved_top_k))    #리스트여서 문자열로 바꿔 줌
 
 
@@ -263,7 +290,7 @@ def LLM_Final_Generate(state):
     
     # SQL 코드만 chat history에 저장
     sql_output = final_output.split('```sql')[1].split('```')[0].strip()
-    history.add_ai_message(sql_output)
+    #history.add_ai_message(sql_output)
 
     #print(history.messages)
 

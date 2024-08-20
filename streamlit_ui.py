@@ -60,6 +60,7 @@ if user_question := st.chat_input("무엇이든 물어보살"):
                     st.markdown(f":alien: 쉿! '{node}' 진행 중. :alien:")
                     st.markdown(f"events_output: {state['events_output']}")
                     #history.add_ai_message(state['events_output'])
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     st.markdown("\n\n")
 
                 elif node == 'Retrieve':
@@ -93,5 +94,5 @@ if user_question := st.chat_input("무엇이든 물어보살"):
                     st.session_state.messages.append({"role": "assistant", "content": response})
                     #history.add_ai_message(formatted_sql)
 
-print('\n\n\nhistory: \n', history.messages)
+#print('\n\n\nhistory: \n', history.messages)
                 
