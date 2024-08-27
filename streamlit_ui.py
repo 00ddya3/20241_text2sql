@@ -58,9 +58,9 @@ if user_question := st.chat_input("무엇이든 물어보살"):
                     
                 elif node == "LLM_event_list":
                     st.markdown(f":alien: 쉿! '{node}' 진행 중. :alien:")
-                    st.markdown(f"events_output: {state['events_output']}")
-                    #history.add_ai_message(state['events_output'])
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    events_output = state['events_output']
+                    st.markdown(f"{state['events_output']}")
+                    st.session_state.messages.append({"role": "assistant", "content": events_output})
                     st.markdown("\n\n")
 
                 elif node == 'Retrieve':
@@ -71,15 +71,15 @@ if user_question := st.chat_input("무엇이든 물어보살"):
 
                     for k, (DB_question, DB_query) in enumerate(state['top_k'], start=1):
                         st.markdown(f"{k}:  {DB_question}")
-                        top_k_str = top_k_str + f"question: {DB_question} \t query: {DB_query}"
+                        #top_k_str = top_k_str + f"question: {DB_question} \t query: {DB_query}"
+                        top_k_str = top_k_str + f"{k}:  {DB_question}"
                         #st.markdown(f"검색된 관련 질문 {k}: {DB_question}")
-                        st.markdown("\n")
+                        #st.markdown("\n")
 
-                    #history.add_ai_message(top_k_str)
                     st.markdown("\n\n")
+                    st.session_state.messages.append({"role": "assistant", "content": top_k_str})
                     
-
-                elif node == 'LLM_Final_Generate':
+                elif node == 'SQL_generate':
                     st.markdown(f":alien: 쉿! '{node}' 진행 중. :alien:")
                     st.markdown("\n\n")
                     text = state["final_output"]
@@ -92,7 +92,25 @@ if user_question := st.chat_input("무엇이든 물어보살"):
                     # Streamlit에 표시
                     st.markdown(response, unsafe_allow_html=True)
                     st.session_state.messages.append({"role": "assistant", "content": response})
-                    #history.add_ai_message(formatted_sql)
 
+
+
+                elif node == 'Common_generate':
+                    st.markdown(f":alien: 쉿! '{node}' 진행 중. :alien:")
+                    st.markdown("\n\n")
+                    text = state["final_output"]
+                    
+                    # SQL 코드 포맷팅
+                    try : 
+                        raw_sql = text.split('```sql')[1].split('```')[0].strip()
+                        formatted_sql = sqlparse.format(raw_sql, reindent=True, keyword_case='upper')
+                        response = text.replace(raw_sql, formatted_sql)
+                    except:
+                        response = text
+
+                    # Streamlit에 표시
+                    st.markdown(response, unsafe_allow_html=True)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    #history.add_ai_message(formatted_sql)
 #print('\n\n\nhistory: \n', history.messages)
                 

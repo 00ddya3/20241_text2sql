@@ -2,16 +2,19 @@
 # datahub 연결 
 # 효율적으로 db 업데이트(Locality Sensitive Hashing (LSH)?)
 # 크롤링 자동화 (aws lambda 사용, https://alsxor5.tistory.com/118)
-# 네이버 api로 이벤트 lat lon 크롤링
 # event place와 geo data 내 건물명의 mismatch 문제
-# string type nan 고치기
 
 
 
 import re
 import os
+import io
 import requests
+import boto3
+import time
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datetime import date
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
@@ -54,7 +57,23 @@ def get_event_info_from_naver(keyword, page_limit):
     
     def extract_juso_from_page(html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
-        juso = soup.find('span', class_='LDgIH').get_text(separator=' ', strip=True)
+
+        try:
+            juso = soup.find('div', class_='zZfO1').get_text(separator=' ', strip=True)
+            juso = juso.replace('도로명', '').replace('복사', '').strip()
+        except:
+            pass
+
+        try:
+            juso = soup.find('span', class_='LDgIH').get_text(separator=' ', strip=True)
+        except:
+            pass
+
+        try:
+            juso = soup.find('span', class_='NF_Bf').get_text(separator=' ', strip=True)
+        except:
+            pass
+
         return juso
     
     def add_info(texts):
@@ -177,6 +196,14 @@ def get_event_info_from_naver(keyword, page_limit):
             place_url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query=" + str(place)
             page.goto(place_url)
             page.wait_for_timeout(100)  # 페이지 로딩 대기시간 조절 : 0.1초
+            
+            # 검색 시 플레이스가 여러 개 뜨는 경우 uFxrl 키 클릭
+            try :
+                page.click('.uFxr1')
+                page.wait_for_timeout(100)
+            except :
+                pass
+            
             html = page.content()
 
             try:
@@ -210,7 +237,7 @@ def get_event_info_from_naver(keyword, page_limit):
             "end_date": event_period_end,
             "area": event_area,
             "category": event_category,
-            "dt": str(date.today().strftime('%Y%m%d'))
+            #"dt": str(date.today().strftime('%Y%m%d'))
             })
     
     event_df = event_df.astype(str)
@@ -223,14 +250,45 @@ def merge_data():
 
     # 기존 데이터와 새 데이터 로드
     origin_data = pd.read_csv('event_crawling.csv')
-    festival_data = get_event_info_from_naver('축제', 19)   #80개
-    show_data = get_event_info_from_naver('콘서트', 7)  #80개
+    festival_data = get_event_info_from_naver('축제', 9)   #40개
+    show_data = get_event_info_from_naver('콘서트', 3)  #40개
 
-    # 중복 제거
+    # csv 형태로 전체 df 관리
     combined_data = pd.concat([origin_data, festival_data, show_data]).drop_duplicates(subset=['k_date', 'title', 'place'], keep='first')
-
-    # 데이터베이스에 업데이트
     combined_data.to_csv('event_crawling.csv', index=False)
 
+    # s3에 추가할 unique data
+    new_data = combined_data[~combined_data[['k_date', 'title', 'place']].apply(tuple, axis=1).isin(origin_data[['k_date', 'title', 'place']].apply(tuple, axis=1))]
 
-merge_data()
+    return new_data
+
+
+def upload_on_s3():
+
+    df = merge_data()
+    df = df.astype(str)
+
+    # DataFrame을 Parquet 형식으로 저장
+    buffer = io.BytesIO()
+    table = pa.Table.from_pandas(df)
+    pq.write_table(table, buffer)
+
+    # S3 클라이언트 생성
+    s3 = boto3.client('s3')
+
+    # 파일 경로와 S3 버킷 및 키를 정의합니다.
+    #file_path = 'event_crawling.parquet'  # 로컬 파일 경로
+    bucket_name = 'infra-ai-assistant-prd-ods'  # S3 버킷 이름
+    dt = str(date.today().strftime('%Y%m%d'))
+    s3_key = f'db=o_samson_event/tb=event_web_crawling/dt={dt}/event_crawling.parquet'  # S3 경로
+
+    # S3에 파일 업로드
+    buffer.seek(0)
+    s3.upload_fileobj(buffer, bucket_name, s3_key)
+
+    print(f"File uploaded to s3://{bucket_name}/{s3_key}")
+
+
+upload_on_s3()
+
+

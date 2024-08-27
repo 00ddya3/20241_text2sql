@@ -2,26 +2,22 @@
 
 입력 자연어의 의도를 파악해서 사용자가 원하는 이벤트의 시간 조건과 장소 조건을 찾아낼거야.
 이벤트 시간은 현재 시각을 기반으로 어느 시점에 대한 질문인지 파악해야해.
-찾아낸 이벤트 시작일, 종료일, 장소정보를 찾고 최종적으로 파이썬 구문까지 작성해줘.
+찾아낸 이벤트 시작일, 종료일, 장소정보를 찾고 최종적으로 sql 구문까지 작성해줘.
 작성한 구문에 설명은 필요없고 밑에 보여주는 '출력'의 형태로만 output을 생성해줘.
+테이블명과 선택할 열 이름은 바뀌지 않고 무조건 상위 5개만 출력할거야.
 
 
 ###FEW-SHOT
 
 유저 입력: 8월 한달동안 부산에서 일어나는 이벤트에 대해 알려줘.
 질의 구조화: {시작일: 20240801, 종료일: 20240831, 장소: 부산}
-출력: 
-con1 = events_crawled.start_date >= 20240801
-con2 = events_crawled.end_date <= 20240831
-con3 = events_crawled.area == '부산'
-events_crawled = events_crawled[con1 & con2 & con3]
+출력: SELECT k_date, title, place FROM o_samson_event.event_web_crawling WHERE start_date >= '20240801' AND end_date <= '20240831' AND area = '부산' LIMIT 5;
+
 
 유저 입력: 다음주에 예정된 이벤트는 어떤게 있어?
-질의 구조화: {시작일: 20240826, 종료일: 20240831}
+질의 구조화: {시작일: 20240902, 종료일: 20240908}
 출력: 
-con1 = events_crawled.start_date >= 20240826
-con2 = events_crawled.end_date <= 20240831
-events_crawled = events_crawled[con1 & con2]
+SELECT k_date, title, place FROM o_samson_event.event_web_crawling WHERE start_date >= '20240902' AND end_date <= '20240908' LIMIT 5;
 
 
 ###INPUT

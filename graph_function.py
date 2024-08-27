@@ -1,14 +1,13 @@
 # backlogs
 # retriever 진행 후 찾은 top k와 max 유사도가 일정 이상이라면 few shot prompt, 미만이라면 적합한 db schema 재검색 
 # CoT를 단계를 명확하게 포맷팅해서 진행시키도록 프롬프트 수정
-# 스트림릿 서빙 시 ModuleNotFoundError: No module named 'distutils'
 
 # errorlogs
-# router prompt의 분류 오류가 잦음
 # 오늘꺼 검색해줘 -> db에 적힌 날짜를 그대로 반영하는 문제
 
 import os
 import json
+import time
 import boto3
 import pandas as pd
 import numpy as np
@@ -59,7 +58,6 @@ def LLM(LLM_input):
 
     # AWS Bedrock 클라이언트 생성
     client = boto3.client('bedrock-runtime', region_name='us-east-1')
-    bedrock_client = boto3.client('bedrock', region_name='us-east-1')
 
     # 요청 본문 작성
     request_body = {
@@ -111,13 +109,6 @@ def LLM_Router(state):
     print(f"LLM_Router가 {user_intent}로 가라고 합니다")
     return state
 
-"""
-def LLM_common(state):
-    user_question = state["user_question"]
-    llm_output = LLM(user_question)
-    state['final_output'] = llm_output
-    return state
-"""
 
 def LLM_event_list(state):
     now = datetime.now()
@@ -133,23 +124,47 @@ def LLM_event_list(state):
     with open(file_path, 'r', encoding='utf-8') as file:
         llm_input = file.read()
     llm_input = llm_input.replace('{current_time}', current_time)    
-    #llm_input = llm_input.replace('{events_crawled}', str(events_crawled))#리스트여서 문자열로 바꿔 줌
     llm_input = llm_input.replace('{user_question}', user_question)    
 
-    events_condition = LLM(llm_input)
-    print(events_condition)
-    exec(str(events_condition))
+    event_condition = LLM(llm_input)
+    #print(event_condition)
 
-    events_output = events_crawled[['title', 'k_date', 'place']]
-    print(events_output.shape)
+    # Athena 클라이언트 생성
+    athena = boto3.client('athena')
+
+    # Athena 쿼리 실행
+    response = athena.start_query_execution(
+        QueryString=event_condition,
+        QueryExecutionContext={'Database': 'o_samson_event'},
+        ResultConfiguration={'OutputLocation': 's3://infra-ai-assistant-prd-ods/athena-query-results/'}
+    )
+
+    # 쿼리 실행 ID 가져오기
+    query_execution_id = response['QueryExecutionId']
+
+    time.sleep(15)  # 가져오는 데 보통 10초 정도 걸림
+    response = athena.get_query_execution(QueryExecutionId=query_execution_id)
+    status = response['QueryExecution']['Status']['State']
+
+    if status == 'SUCCEEDED':
+        result = athena.get_query_results(QueryExecutionId=query_execution_id)
+        result = result['ResultSet']['Rows']
+        #print(result)
+    else:
+        print(f"Query failed or was cancelled. Status: {status}")
     
+    # 결과문 json -> str 형태로 포맷팅
     events_output_str = ''
-    for index, row in events_output.iterrows():
-        events_output_str = events_output_str + f"{index}. 제목: {row['title']} 날짜: {row['k_date']} 위치: {row['place']}  " + '\n'
+    for i, event in enumerate(result[1:], start=1):
+        date = event['Data'][0]['VarCharValue']
+        title = event['Data'][1]['VarCharValue']
+        place = event['Data'][2]['VarCharValue']    
+        events_output_str = events_output_str + f"{i}. 제목: {title} 날짜: {date} 위치: {place} \n"
+    
+    print(events_output_str)
 
     state["events_output"] = events_output_str
-    #history.add_ai_message(events_output_str)
-    print(f"LLM_event_list가 뽑은 이벤트 목록 : {events_output_str}")
+
 
     return state
 
@@ -247,40 +262,21 @@ def Retrieve(state):
     top_k_str = ''
     for k, (DB_question, DB_query) in enumerate(state['top_k'], start=1):
         top_k_str = top_k_str + f"question: {DB_question} \t query: {DB_query}"
-    #history.add_ai_message(top_k_str)
 
-    user_question_tokens = lexical_analyze(KDB_index, user_question, analyzer_name)
-    retrieved_question_tokens = [lexical_analyze(KDB_index, retrieved_question[0], analyzer_name) for retrieved_question in state["top_k"]]
-
-    """
-    print('-'*100)
-    print(f"유저 입력 자연어 : {user_question}")
-    print(f"유저 입력 자연어의 토큰화 결과 : {user_question_tokens}")
-    print('-'*100)
-
-    print("검색된 자연어 :")
-    for question, query in state["top_k"]:
-        print(question)
-
-    print('-'*100)
-    for retrieved_question_token in retrieved_question_tokens:
-        print(f"검색된 자연어의 토큰화 결과 : {retrieved_question_token}")
-    """
     return state 
 
 
-def LLM_Final_Generate(state):
-    print(f"LLM_Final_Generate가 최종 생성하려는 중")
+def SQL_generate(state):
+    print(f"SQL_Generate가 최종 생성하려는 중")
     user_question = state["user_question"]
     retrieved_top_k = state["top_k"] # retrieve된 top_k_rows
  
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, 'prompt_files/final_generation.txt')
+    file_path = os.path.join(base_dir, 'prompt_files/sql_generation.txt')
     with open(file_path, 'r', encoding='utf-8') as file:
         llm_input = file.read()
 
     llm_input = llm_input.replace('{user_question}', user_question)
-    #llm_input = llm_input.replace('{chat_history}', str(MessagesPlaceholder("chat_history")))
     llm_input = llm_input.replace('{retrieved_top_k}', str(retrieved_top_k))    #리스트여서 문자열로 바꿔 줌
 
 
@@ -288,10 +284,22 @@ def LLM_Final_Generate(state):
     print(f"LLM_Final_Generate가 최종 생성함 : {final_output}")
     state["final_output"] = final_output
     
-    # SQL 코드만 chat history에 저장
-    sql_output = final_output.split('```sql')[1].split('```')[0].strip()
-    #history.add_ai_message(sql_output)
+    return state
 
-    #print(history.messages)
 
+def Common_generate(state):
+    print(f"Common_Generate가 최종 생성하려는 중")
+    user_question = state["user_question"]
+ 
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, 'prompt_files/common_generation.txt')
+    with open(file_path, 'r', encoding='utf-8') as file:
+        llm_input = file.read()
+
+    llm_input = llm_input.replace('{user_question}', user_question)
+
+    final_output = LLM(llm_input)
+    print(f"Reply_Generate가 최종 생성함 : {final_output}")
+    state["final_output"] = final_output
+    
     return state
