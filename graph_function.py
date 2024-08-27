@@ -130,7 +130,7 @@ def LLM_event_list(state):
     #print(event_condition)
 
     # Athena 클라이언트 생성
-    athena = boto3.client('athena')
+    athena = boto3.client('athena', region_name='ap-northeast-2')
 
     # Athena 쿼리 실행
     response = athena.start_query_execution(
